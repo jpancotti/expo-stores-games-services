@@ -304,11 +304,16 @@ class ExpoStoresGamesServicesModule : Module() {
       snapshotsClient.load(false)
         .addOnSuccessListener { result ->
           val metadataBuffer = result.get()
+          if (metadataBuffer == null) {
+            promise.resolve(emptyList<Map<String, Any>>())
+            return@addOnSuccessListener
+          }
           val saves = mutableListOf<Map<String, Any>>()
 
           try {
             for (i in 0 until metadataBuffer.count) {
               val metadata = metadataBuffer.get(i)
+              if (metadata == null) continue
               saves.add(snapshotMetadataMap(metadata))
             }
           } finally {
