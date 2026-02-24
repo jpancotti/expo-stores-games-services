@@ -1,10 +1,14 @@
 package expo.modules.storesgamesservices
 
+import android.util.Base64
 import com.google.android.gms.games.AchievementsClient
 import com.google.android.gms.games.GamesSignInClient
 import com.google.android.gms.games.PlayGames
 import com.google.android.gms.games.Player
+import com.google.android.gms.games.SnapshotsClient
 import com.google.android.gms.games.achievement.Achievement
+import com.google.android.gms.games.snapshot.SnapshotMetadata
+import com.google.android.gms.games.snapshot.SnapshotMetadataChange
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -13,6 +17,13 @@ class ExpoStoresGamesServicesModule : Module() {
   private var pendingPromise: Promise? = null
   private val RC_LEADERBOARD_UI: Int = 9004
   private val RC_ACHIEVEMENTS_UI: Int = 9005
+
+  private fun snapshotMetadataMap(metadata: SnapshotMetadata): Map<String, Any> {
+    return mapOf(
+      "name" to metadata.uniqueName,
+      "modificationDate" to metadata.lastModifiedTimestamp
+    )
+  }
 
   override fun definition() = ModuleDefinition {
     Name("ExpoStoresGamesServices")
@@ -230,6 +241,164 @@ class ExpoStoresGamesServicesModule : Module() {
         }
         .addOnFailureListener { exception: Exception ->
           promise.reject("GET_ACHIEVEMENTS_FAILED", "Failed to get achievements: ${exception.message ?: exception.localizedMessage ?: "Unknown error"}", exception)
+        }
+    }
+
+    AsyncFunction("saveGameData") { data: String, name: String, promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.reject("NO_ACTIVITY", "No current activity", null)
+        return@AsyncFunction
+      }
+
+      val decodedBytes = try {
+        Base64.decode(data, Base64.DEFAULT)
+      } catch (exception: IllegalArgumentException) {
+        promise.reject("INVALID_BASE64", "Data must be a valid base64 string", exception)
+        return@AsyncFunction
+      }
+
+      val snapshotsClient = PlayGames.getSnapshotsClient(activity)
+      snapshotsClient
+        .open(name, true, SnapshotsClient.RESOLUTION_POLICY_MOST_RECENTLY_MODIFIED)
+        .addOnSuccessListener { openResult ->
+          val snapshot = openResult.data
+          if (snapshot == null) {
+            promise.reject("SAVE_GAME_FAILED", "Failed to open snapshot for save", null)
+            return@addOnSuccessListener
+          }
+
+          try {
+            snapshot.snapshotContents.writeBytes(decodedBytes)
+          } catch (exception: Exception) {
+            promise.reject("SAVE_GAME_FAILED", "Failed to write snapshot data", exception)
+            return@addOnSuccessListener
+          }
+
+          val metadataChange = SnapshotMetadataChange.Builder()
+            .setDescription("Saved game data")
+            .build()
+
+          snapshotsClient
+            .commitAndClose(snapshot, metadataChange)
+            .addOnSuccessListener { metadata ->
+              promise.resolve(snapshotMetadataMap(metadata))
+            }
+            .addOnFailureListener { exception: Exception ->
+              promise.reject("SAVE_GAME_FAILED", "Failed to commit saved game: ${exception.message ?: exception.localizedMessage ?: "Unknown error"}", exception)
+            }
+        }
+        .addOnFailureListener { exception: Exception ->
+          promise.reject("SAVE_GAME_FAILED", "Failed to open saved game: ${exception.message ?: exception.localizedMessage ?: "Unknown error"}", exception)
+        }
+    }
+
+    AsyncFunction("fetchSavedGames") { promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.reject("NO_ACTIVITY", "No current activity", null)
+        return@AsyncFunction
+      }
+
+      val snapshotsClient = PlayGames.getSnapshotsClient(activity)
+      snapshotsClient.load(false)
+        .addOnSuccessListener { result ->
+          val metadataBuffer = result.get()
+          val saves = mutableListOf<Map<String, Any>>()
+
+          try {
+            for (i in 0 until metadataBuffer.count) {
+              val metadata = metadataBuffer.get(i)
+              saves.add(snapshotMetadataMap(metadata))
+            }
+          } finally {
+            metadataBuffer.release()
+          }
+
+          val sorted = saves.sortedByDescending {
+            (it["modificationDate"] as? Long) ?: 0L
+          }
+          promise.resolve(sorted)
+        }
+        .addOnFailureListener { exception: Exception ->
+          promise.reject("FETCH_SAVED_GAMES_FAILED", "Failed to fetch saved games: ${exception.message ?: exception.localizedMessage ?: "Unknown error"}", exception)
+        }
+    }
+
+    AsyncFunction("loadGameData") { name: String, promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.reject("NO_ACTIVITY", "No current activity", null)
+        return@AsyncFunction
+      }
+
+      val snapshotsClient = PlayGames.getSnapshotsClient(activity)
+      snapshotsClient
+        .open(name, false, SnapshotsClient.RESOLUTION_POLICY_MOST_RECENTLY_MODIFIED)
+        .addOnSuccessListener { openResult ->
+          val snapshot = openResult.data
+          if (snapshot == null) {
+            promise.resolve(null)
+            return@addOnSuccessListener
+          }
+
+          val metadata = snapshot.metadata
+          val encoded = try {
+            val bytes = snapshot.snapshotContents.readFully()
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
+          } catch (exception: Exception) {
+            promise.reject("LOAD_GAME_DATA_FAILED", "Failed to read snapshot data", exception)
+            return@addOnSuccessListener
+          }
+
+          snapshotsClient
+            .discardAndClose(snapshot)
+            .addOnSuccessListener {
+              promise.resolve(
+                mapOf(
+                  "name" to metadata.uniqueName,
+                  "modificationDate" to metadata.lastModifiedTimestamp,
+                  "data" to encoded
+                )
+              )
+            }
+            .addOnFailureListener { exception: Exception ->
+              promise.reject("LOAD_GAME_DATA_FAILED", "Failed to close snapshot after load: ${exception.message ?: exception.localizedMessage ?: "Unknown error"}", exception)
+            }
+        }
+        .addOnFailureListener { exception: Exception ->
+          promise.reject("LOAD_GAME_DATA_FAILED", "Failed to open saved game: ${exception.message ?: exception.localizedMessage ?: "Unknown error"}", exception)
+        }
+    }
+
+    AsyncFunction("deleteSavedGames") { name: String, promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.reject("NO_ACTIVITY", "No current activity", null)
+        return@AsyncFunction
+      }
+
+      val snapshotsClient = PlayGames.getSnapshotsClient(activity)
+      snapshotsClient
+        .open(name, false, SnapshotsClient.RESOLUTION_POLICY_MOST_RECENTLY_MODIFIED)
+        .addOnSuccessListener { openResult ->
+          val snapshot = openResult.data
+          if (snapshot == null) {
+            promise.resolve()
+            return@addOnSuccessListener
+          }
+
+          snapshotsClient
+            .delete(snapshot.metadata)
+            .addOnSuccessListener {
+              promise.resolve()
+            }
+            .addOnFailureListener { exception: Exception ->
+              promise.reject("DELETE_SAVED_GAMES_FAILED", "Failed to delete saved game: ${exception.message ?: exception.localizedMessage ?: "Unknown error"}", exception)
+            }
+        }
+        .addOnFailureListener { exception: Exception ->
+          promise.reject("DELETE_SAVED_GAMES_FAILED", "Failed to open saved game for delete: ${exception.message ?: exception.localizedMessage ?: "Unknown error"}", exception)
         }
     }
   }

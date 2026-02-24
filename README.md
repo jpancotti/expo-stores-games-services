@@ -31,6 +31,30 @@ No additional setup necessary.
 
 Run `npx pod-install` after installing the npm package.
 
+If you use saved games on iOS (`saveGameData`, `fetchSavedGames`, etc.), enable iCloud entitlements with a container ID, for example:
+
+```json
+[
+  "expo-stores-games-services",
+  {
+    "android": { "projectId": "1234567890" },
+    "ios": {
+      "iCloudContainerIdentifiers": ["iCloud.com.example.app"],
+      "iCloudServices": ["CloudDocuments"]
+    }
+  }
+]
+```
+
+# Saved games API
+
+- `saveGameData(dataBase64, name)`
+- `fetchSavedGames()`
+- `loadGameData(name)`
+- `deleteSavedGames(name)`
+
+`dataBase64` is a base64-encoded string for cross-platform compatibility.
+
 # Contributing
 
 Contributions are very welcome! Please refer to guidelines described in the [contributing guide]( https://github.com/expo/expo#contributing).

@@ -1,6 +1,6 @@
 import { TimeSpan } from "./constants";
 import ExpoStoresGamesServicesModule from "./ExpoStoresGamesServicesModule";
-import { UserScore, UserInfo, Achievement } from "./types";
+import { UserScore, UserInfo, Achievement, SavedGame, SavedGameMetadata } from "./types";
 
 export * from "./constants";
 export * from "./types";
@@ -106,4 +106,37 @@ export function incrementAchievement(
 
 export function getAchievements(): Promise<Achievement[]> {
   return ExpoStoresGamesServicesModule.getAchievements();
+}
+
+export function saveGameData(
+  data: string,
+  name: string
+): Promise<SavedGameMetadata> {
+  if (!name || name.trim().length === 0) {
+    throw new Error("name cannot be empty");
+  }
+  if (typeof data !== "string") {
+    throw new Error("data must be a base64 string");
+  }
+  return ExpoStoresGamesServicesModule.saveGameData(data, name);
+}
+
+export function fetchSavedGames(): Promise<SavedGameMetadata[]> {
+  return ExpoStoresGamesServicesModule.fetchSavedGames();
+}
+
+export function loadGameData(
+  name: string
+): Promise<SavedGame | null> {
+  if (!name || name.trim().length === 0) {
+    throw new Error("name cannot be empty");
+  }
+  return ExpoStoresGamesServicesModule.loadGameData(name);
+}
+
+export function deleteSavedGames(name: string): Promise<void> {
+  if (!name || name.trim().length === 0) {
+    throw new Error("name cannot be empty");
+  }
+  return ExpoStoresGamesServicesModule.deleteSavedGames(name);
 }

@@ -20,3 +20,13 @@ export type Achievement = {
   progress?: number; // 0-100 for incremental achievements
   totalSteps?: number; // total steps for incremental achievements
 };
+
+export type SavedGameMetadata = {
+  name: string;
+  modificationDate: number; // timestamp in milliseconds
+  deviceName?: string | null;
+};
+
+export type SavedGame = SavedGameMetadata & {
+  data: string; // base64 encoded bytes
+};

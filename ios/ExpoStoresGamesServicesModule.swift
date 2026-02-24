@@ -1,7 +1,53 @@
 import ExpoModulesCore
+import Foundation
 import GameKit
 
 public class ExpoStoresGamesServicesModule:  Module {
+    private func savedGameMetadataMap(_ game: GKSavedGame) -> [String: Any] {
+        return [
+            "name": game.name,
+            "modificationDate": Int(game.modificationDate.timeIntervalSince1970 * 1000),
+            "deviceName": game.deviceName
+        ]
+    }
+
+    private func savedGameDataMap(_ game: GKSavedGame, data: Data) -> [String: Any] {
+        return [
+            "name": game.name,
+            "modificationDate": Int(game.modificationDate.timeIntervalSince1970 * 1000),
+            "deviceName": game.deviceName,
+            "data": data.base64EncodedString()
+        ]
+    }
+
+    private func selectMostRecent(_ games: [GKSavedGame]) -> GKSavedGame? {
+        return games.max { left, right in
+            left.modificationDate < right.modificationDate
+        }
+    }
+
+    private func resolveNameConflictsIfNeeded(_ games: [GKSavedGame]) async throws -> [GKSavedGame] {
+        let grouped = Dictionary(grouping: games, by: { $0.name })
+        var hadConflicts = false
+
+        for (_, group) in grouped where group.count > 1 {
+            hadConflicts = true
+
+            guard let preferred = selectMostRecent(group) else {
+                continue
+            }
+
+            let preferredData = try await preferred.loadData()
+            _ = try await GKLocalPlayer.local.resolveConflictingSavedGames(group, with: preferredData)
+        }
+
+        if hadConflicts {
+            return try await GKLocalPlayer.local.fetchSavedGames()
+        }
+
+        return games
+    }
+
     public func definition() -> ModuleDefinition {
         Name("ExpoStoresGamesServices")
 
@@ -226,6 +272,53 @@ public class ExpoStoresGamesServicesModule:  Module {
             }
             
             return result
+        }
+
+        AsyncFunction("saveGameData") { (data: String, name: String) async throws -> [String: Any] in
+            guard let decoded = Data(base64Encoded: data, options: .ignoreUnknownCharacters) else {
+                throw NSError(domain: "GameCenter", code: 400, userInfo: [
+                    NSLocalizedDescriptionKey: "Invalid base64 game data"
+                ])
+            }
+
+            try await GKLocalPlayer.local.saveGameData(decoded, withName: name)
+            let games = try await GKLocalPlayer.local.fetchSavedGames()
+            let resolvedGames = try await resolveNameConflictsIfNeeded(games)
+            let named = resolvedGames.filter { $0.name == name }
+
+            guard let preferred = selectMostRecent(named) else {
+                throw NSError(domain: "GameCenter", code: 404, userInfo: [
+                    NSLocalizedDescriptionKey: "Saved game not found after save"
+                ])
+            }
+
+            return savedGameMetadataMap(preferred)
+        }
+
+        AsyncFunction("fetchSavedGames") { () async throws -> [[String: Any]] in
+            let games = try await GKLocalPlayer.local.fetchSavedGames()
+            let resolvedGames = try await resolveNameConflictsIfNeeded(games)
+
+            return resolvedGames
+                .sorted { $0.modificationDate > $1.modificationDate }
+                .map { savedGameMetadataMap($0) }
+        }
+
+        AsyncFunction("loadGameData") { (name: String) async throws -> [String: Any]? in
+            let games = try await GKLocalPlayer.local.fetchSavedGames()
+            let resolvedGames = try await resolveNameConflictsIfNeeded(games)
+            let named = resolvedGames.filter { $0.name == name }
+
+            guard let preferred = selectMostRecent(named) else {
+                return nil
+            }
+
+            let data = try await preferred.loadData()
+            return savedGameDataMap(preferred, data: data)
+        }
+
+        AsyncFunction("deleteSavedGames") { (name: String) async throws -> Void in
+            try await GKLocalPlayer.local.deleteSavedGames(withName: name)
         }
     }
 }
