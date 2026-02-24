@@ -3,10 +3,19 @@ import Foundation
 import GameKit
 
 public class ExpoStoresGamesServicesModule:  Module {
+    private func modificationDateMs(_ game: GKSavedGame) -> Int {
+        let date = game.modificationDate ?? Date(timeIntervalSince1970: 0)
+        return Int(date.timeIntervalSince1970 * 1000)
+    }
+
+    private func modificationSortValue(_ game: GKSavedGame) -> TimeInterval {
+        return (game.modificationDate ?? Date(timeIntervalSince1970: 0)).timeIntervalSince1970
+    }
+
     private func savedGameMetadataMap(_ game: GKSavedGame) -> [String: Any] {
         return [
             "name": game.name,
-            "modificationDate": Int(game.modificationDate.timeIntervalSince1970 * 1000),
+            "modificationDate": modificationDateMs(game),
             "deviceName": game.deviceName
         ]
     }
@@ -14,7 +23,7 @@ public class ExpoStoresGamesServicesModule:  Module {
     private func savedGameDataMap(_ game: GKSavedGame, data: Data) -> [String: Any] {
         return [
             "name": game.name,
-            "modificationDate": Int(game.modificationDate.timeIntervalSince1970 * 1000),
+            "modificationDate": modificationDateMs(game),
             "deviceName": game.deviceName,
             "data": data.base64EncodedString()
         ]
@@ -22,7 +31,7 @@ public class ExpoStoresGamesServicesModule:  Module {
 
     private func selectMostRecent(_ games: [GKSavedGame]) -> GKSavedGame? {
         return games.max { left, right in
-            left.modificationDate < right.modificationDate
+            modificationSortValue(left) < modificationSortValue(right)
         }
     }
 
@@ -300,7 +309,7 @@ public class ExpoStoresGamesServicesModule:  Module {
             let resolvedGames = try await resolveNameConflictsIfNeeded(games)
 
             return resolvedGames
-                .sorted { $0.modificationDate > $1.modificationDate }
+                .sorted { modificationSortValue($0) > modificationSortValue($1) }
                 .map { savedGameMetadataMap($0) }
         }
 
