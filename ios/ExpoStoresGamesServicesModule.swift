@@ -1,6 +1,7 @@
 import ExpoModulesCore
 import Foundation
 import GameKit
+import UIKit
 
 public class ExpoStoresGamesServicesModule:  Module {
     private func modificationDateMs(_ game: GKSavedGame) -> Int {
@@ -57,6 +58,43 @@ public class ExpoStoresGamesServicesModule:  Module {
         return games
     }
 
+    @MainActor
+    private func topViewController(from root: UIViewController?) -> UIViewController? {
+        guard let root else { return nil }
+
+        if let nav = root as? UINavigationController {
+            return topViewController(from: nav.visibleViewController)
+        }
+
+        if let tab = root as? UITabBarController {
+            return topViewController(from: tab.selectedViewController)
+        }
+
+        if let presented = root.presentedViewController {
+            return topViewController(from: presented)
+        }
+
+        return root
+    }
+
+    @MainActor
+    private func activePresenterViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .filter { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }
+
+        for scene in scenes {
+            if let keyRoot = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController {
+                return topViewController(from: keyRoot)
+            }
+            if let anyRoot = scene.windows.first?.rootViewController {
+                return topViewController(from: anyRoot)
+            }
+        }
+
+        return topViewController(from: UIApplication.shared.delegate?.window??.rootViewController)
+    }
+
     public func definition() -> ModuleDefinition {
         Name("ExpoStoresGamesServices")
 
@@ -81,10 +119,15 @@ public class ExpoStoresGamesServicesModule:  Module {
                     
                     if let vc = viewController {
                         Task { @MainActor in
-                            if let rootVC = UIApplication.shared.delegate?.window??.rootViewController {
-                                rootVC.present(vc, animated: true, completion: nil)
+                            if let presenter = self.activePresenterViewController() {
+                                presenter.present(vc, animated: true, completion: nil)
                             } else {
-                                print("No root view controller available")
+                                if !hasResumed {
+                                    hasResumed = true
+                                    continuation.resume(throwing: NSError(domain: "GameCenter", code: 500, userInfo: [
+                                        NSLocalizedDescriptionKey: "No active view controller to present Game Center sign-in"
+                                    ]))
+                                }
                             }
                         }
                         return
@@ -108,7 +151,7 @@ public class ExpoStoresGamesServicesModule:  Module {
         }
         
         AsyncFunction("showLeaderboard") { (leaderboardID: String, timeSpan: Int) async throws -> [String: Any] in
-            await MainActor.run {
+            try await MainActor.run {
                 let viewController = GKGameCenterViewController(
                                 leaderboardID: leaderboardID,
                                 playerScope: .global,
@@ -116,11 +159,13 @@ public class ExpoStoresGamesServicesModule:  Module {
                 )
                 viewController.gameCenterDelegate = GameCenterDelegate.shared
                 
-                if let rootVC = UIApplication.shared.delegate?.window??.rootViewController {
-                    rootVC.present(viewController, animated: true, completion: nil)
-                } else {
-                    print("No root view controller available")
+                guard let presenter = self.activePresenterViewController() else {
+                    throw NSError(domain: "GameCenter", code: 500, userInfo: [
+                        NSLocalizedDescriptionKey: "No active view controller to present leaderboard"
+                    ])
                 }
+
+                presenter.present(viewController, animated: true, completion: nil)
             }
             
             return ["status": "shown"]
@@ -163,15 +208,17 @@ public class ExpoStoresGamesServicesModule:  Module {
         }
         
         AsyncFunction("showAchievements") { () async throws -> [String: Any] in
-            await MainActor.run {
+            try await MainActor.run {
                 let viewController = GKGameCenterViewController(state: .achievements)
                 viewController.gameCenterDelegate = GameCenterDelegate.shared
                 
-                if let rootVC = UIApplication.shared.delegate?.window??.rootViewController {
-                    rootVC.present(viewController, animated: true, completion: nil)
-                } else {
-                    print("No root view controller available")
+                guard let presenter = self.activePresenterViewController() else {
+                    throw NSError(domain: "GameCenter", code: 500, userInfo: [
+                        NSLocalizedDescriptionKey: "No active view controller to present achievements"
+                    ])
                 }
+
+                presenter.present(viewController, animated: true, completion: nil)
             }
             
             return ["status": "shown"]
