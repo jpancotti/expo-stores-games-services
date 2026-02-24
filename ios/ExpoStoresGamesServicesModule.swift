@@ -110,12 +110,6 @@ public class ExpoStoresGamesServicesModule:  Module {
                 
                 localPlayer.authenticateHandler = { viewController, error in
                     guard !hasResumed else { return }
-
-                    if let error = error  {
-                        hasResumed = true
-                        continuation.resume(throwing: error)
-                        return
-                    }
                     
                     if let vc = viewController {
                         Task { @MainActor in
@@ -124,6 +118,7 @@ public class ExpoStoresGamesServicesModule:  Module {
                             } else {
                                 if !hasResumed {
                                     hasResumed = true
+                                    localPlayer.authenticateHandler = nil
                                     continuation.resume(throwing: NSError(domain: "GameCenter", code: 500, userInfo: [
                                         NSLocalizedDescriptionKey: "No active view controller to present Game Center sign-in"
                                     ]))
@@ -135,16 +130,24 @@ public class ExpoStoresGamesServicesModule:  Module {
                     
                     if localPlayer.isAuthenticated {
                         hasResumed = true
+                        localPlayer.authenticateHandler = nil
                         continuation.resume(returning: [
                             "playerID": localPlayer.gamePlayerID,
                             "alias": localPlayer.alias,
                             "displayName": localPlayer.displayName
                         ])
                     } else {
-                        hasResumed = true
-                        continuation.resume(throwing: NSError(domain: "GameCenter", code: 401, userInfo: [
-                            NSLocalizedDescriptionKey: "User not authenticated"
-                        ]))
+                        if let error = error {
+                            hasResumed = true
+                            localPlayer.authenticateHandler = nil
+                            continuation.resume(throwing: error)
+                        } else {
+                            hasResumed = true
+                            localPlayer.authenticateHandler = nil
+                            continuation.resume(throwing: NSError(domain: "GameCenter", code: 401, userInfo: [
+                                NSLocalizedDescriptionKey: "User not authenticated"
+                            ]))
+                        }
                     }
                 }
             }
