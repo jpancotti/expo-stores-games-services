@@ -4,6 +4,24 @@ import GameKit
 import UIKit
 
 public class ExpoStoresGamesServicesModule:  Module {
+    private func ensureICloudAvailable() throws {
+        guard FileManager.default.ubiquityIdentityToken != nil else {
+            throw NSError(domain: "GameCenter", code: 1001, userInfo: [
+                NSLocalizedDescriptionKey: "iCloud is unavailable. Sign in to iCloud and enable iCloud Drive, then retry."
+            ])
+        }
+    }
+
+    private func detailedError(_ action: String, _ error: Error) -> NSError {
+        let nsError = error as NSError
+        let description = "\(action) failed [\(nsError.domain) code \(nsError.code)]: \(nsError.localizedDescription)"
+        print("[ExpoStoresGamesServices][\(action)] domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
+        return NSError(domain: "GameCenter", code: nsError.code, userInfo: [
+            NSLocalizedDescriptionKey: description,
+            NSUnderlyingErrorKey: nsError
+        ])
+    }
+
     private func modificationDateMs(_ game: GKSavedGame) -> Int {
         let date = game.modificationDate ?? Date(timeIntervalSince1970: 0)
         return Int(date.timeIntervalSince1970 * 1000)
@@ -340,44 +358,64 @@ public class ExpoStoresGamesServicesModule:  Module {
                 ])
             }
 
-            try await GKLocalPlayer.local.saveGameData(decoded, withName: name)
-            let games = try await GKLocalPlayer.local.fetchSavedGames()
-            let resolvedGames = try await resolveNameConflictsIfNeeded(games)
-            let named = resolvedGames.filter { $0.name == name }
+            do {
+                try ensureICloudAvailable()
+                try await GKLocalPlayer.local.saveGameData(decoded, withName: name)
+                let games = try await GKLocalPlayer.local.fetchSavedGames()
+                let resolvedGames = try await resolveNameConflictsIfNeeded(games)
+                let named = resolvedGames.filter { $0.name == name }
 
-            guard let preferred = selectMostRecent(named) else {
-                throw NSError(domain: "GameCenter", code: 404, userInfo: [
-                    NSLocalizedDescriptionKey: "Saved game not found after save"
-                ])
+                guard let preferred = selectMostRecent(named) else {
+                    throw NSError(domain: "GameCenter", code: 404, userInfo: [
+                        NSLocalizedDescriptionKey: "Saved game not found after save"
+                    ])
+                }
+
+                return savedGameMetadataMap(preferred)
+            } catch {
+                throw detailedError("saveGameData", error)
             }
-
-            return savedGameMetadataMap(preferred)
         }
 
         AsyncFunction("fetchSavedGames") { () async throws -> [[String: Any]] in
-            let games = try await GKLocalPlayer.local.fetchSavedGames()
-            let resolvedGames = try await resolveNameConflictsIfNeeded(games)
+            do {
+                try ensureICloudAvailable()
+                let games = try await GKLocalPlayer.local.fetchSavedGames()
+                let resolvedGames = try await resolveNameConflictsIfNeeded(games)
 
-            return resolvedGames
-                .sorted { modificationSortValue($0) > modificationSortValue($1) }
-                .map { savedGameMetadataMap($0) }
+                return resolvedGames
+                    .sorted { modificationSortValue($0) > modificationSortValue($1) }
+                    .map { savedGameMetadataMap($0) }
+            } catch {
+                throw detailedError("fetchSavedGames", error)
+            }
         }
 
         AsyncFunction("loadGameData") { (name: String) async throws -> [String: Any]? in
-            let games = try await GKLocalPlayer.local.fetchSavedGames()
-            let resolvedGames = try await resolveNameConflictsIfNeeded(games)
-            let named = resolvedGames.filter { $0.name == name }
+            do {
+                try ensureICloudAvailable()
+                let games = try await GKLocalPlayer.local.fetchSavedGames()
+                let resolvedGames = try await resolveNameConflictsIfNeeded(games)
+                let named = resolvedGames.filter { $0.name == name }
 
-            guard let preferred = selectMostRecent(named) else {
-                return nil
+                guard let preferred = selectMostRecent(named) else {
+                    return nil
+                }
+
+                let data = try await preferred.loadData()
+                return savedGameDataMap(preferred, data: data)
+            } catch {
+                throw detailedError("loadGameData", error)
             }
-
-            let data = try await preferred.loadData()
-            return savedGameDataMap(preferred, data: data)
         }
 
         AsyncFunction("deleteSavedGames") { (name: String) async throws -> Void in
-            try await GKLocalPlayer.local.deleteSavedGames(withName: name)
+            do {
+                try ensureICloudAvailable()
+                try await GKLocalPlayer.local.deleteSavedGames(withName: name)
+            } catch {
+                throw detailedError("deleteSavedGames", error)
+            }
         }
     }
 }
